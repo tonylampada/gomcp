@@ -21,7 +21,9 @@
       "Bash(MCP_GITHUB_GITHUB_CLIENT_ID=Ov23liWqyr4bn79Rigor MCP_GITHUB_GITHUB_CLIENT_SECRET=9a7395ef82f24990bdc1a922bd89b91dfc507f88 uv run python -m mcp_simple_auth.server --transport streamable-http --port 9090 --host 0.0.0.0)",
       "Bash(ss:*)",
       "Bash(uv)",
-      "Bash(uv add:*)"
+      "Bash(uv add:*)",
+      "Bash(chmod:*)",
+      "Bash(git add:*)"
     ],
     "deny": []
   }
