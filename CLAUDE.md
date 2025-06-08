@@ -82,3 +82,7 @@ See `MCP_TOOLS_PROGRESS.md` for investigation details and progress tracking.
 - The server requires GitHub OAuth credentials to be set as environment variables
 - Logs are stored in `logs/` directory with timestamps
 - The `temp/` directory contains the full MCP Python SDK source for reference
+
+## Debugging Tips
+
+- When debugging problems, don't run custom commands. Save a test script and be updating it and running it instead

@@ -32,7 +32,8 @@
       "Bash(./diagnose_startup.sh:*)",
       "Bash(./test_entry_point.sh:*)",
       "Bash(./test_server.sh:*)",
-      "Bash(./monitor_mcp.sh:*)"
+      "Bash(./monitor_mcp.sh:*)",
+      "Bash(grep:*)"
     ],
     "deny": []
   }

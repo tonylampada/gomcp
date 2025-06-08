@@ -46,3 +46,7 @@ temp/
 tmp/
 *.tmp
 *.bak
+
+# Logs
+logs/
+*.log

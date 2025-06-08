@@ -60,9 +60,9 @@ if lsof -i:9090 >/dev/null 2>&1; then
 fi
 
 # Run server with UV using the entry point
-debug "Executing: uv run mcp-simple-auth --transport streamable-http --port 9090 --host 0.0.0.0"
+debug "Executing: uv run mcp-simple-auth --transport sse --port 9090 --host 0.0.0.0"
 uv run mcp-simple-auth \
-    --transport streamable-http \
+    --transport sse \
     --port 9090 \
     --host 0.0.0.0 \
     > "$LOG_FILE" 2>&1 &

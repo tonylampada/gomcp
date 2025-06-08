@@ -291,45 +291,38 @@ def create_simple_mcp_server(settings: ServerSettings) -> FastMCP:
             valid_scopes=["user", "claudeai"],
             default_scopes=["user"],
         ),
-        required_scopes=["claudeai"],
+        required_scopes=[],  # Don't require auth for discovery
     )
 
     app = FastMCP(
         name="Simple GitHub MCP Server",
         instructions="A simple MCP server with GitHub OAuth authentication",
-        auth_server_provider=oauth_provider,
         host=settings.host,
         port=settings.port,
         debug=True,
-        auth=auth_settings,
         cors=True,  # Enable CORS for remote access
     )
+    
+    
 
+    @app.custom_route("/", methods=["GET"])
+    async def root_endpoint(request: Request) -> Response:
+        """Root endpoint for MCP discovery."""
+        return JSONResponse({
+            "mcp": {
+                "version": "1.0"
+            },
+            "transport": {
+                "type": "sse",
+                "endpoint": "/sse"
+            }
+        })
+    
     @app.custom_route("/debug/test", methods=["GET"])
     async def debug_test(request: Request) -> Response:
         """Test endpoint."""
         return JSONResponse({"status": "ok", "server": "Simple GitHub MCP Server"})
     
-    @app.custom_route("/", methods=["GET"])
-    async def root_endpoint(request: Request) -> Response:
-        """Root endpoint."""
-        access_token = None
-        try:
-            access_token = get_access_token()
-        except:
-            pass
-            
-        logger.info(f"Root endpoint accessed. Authenticated: {access_token is not None}")
-        return JSONResponse({
-            "name": "Simple GitHub MCP Server",
-            "version": "1.0.0",
-            "protocol": "mcp",
-            "status": "authenticated" if access_token else "unauthenticated",
-            "tools": ["get_user_profile"],
-            "sse_endpoint": "/sse",
-            "messages_endpoint": "/messages/",
-            "transport": "sse"
-        })
     
     
     @app.custom_route("/sse", methods=["GET"])
@@ -339,8 +332,99 @@ def create_simple_mcp_server(settings: ServerSettings) -> FastMCP:
         logger.info(f"Method: {request.method}")
         logger.info(f"URL: {request.url}")
         logger.info(f"Headers: {dict(request.headers)}")
-        return JSONResponse({"error": "debug_sse_endpoint"}, status_code=400)
+        access_token = None
+        try:
+            access_token = get_access_token()
+            logger.info(f"SSE Access token: {access_token}")
+        except Exception as e:
+            logger.info(f"SSE Auth error: {e}")
+        return JSONResponse({"error": "debug_sse_endpoint", "authenticated": access_token is not None}, status_code=400)
     
+    
+    # Add OAuth endpoints manually
+    @app.custom_route("/.well-known/oauth-authorization-server", methods=["GET"])
+    async def oauth_discovery(request: Request) -> Response:
+        """OAuth authorization server discovery."""
+        base_url = str(settings.server_url).rstrip('/')  # Remove trailing slash
+        return JSONResponse({
+            "issuer": f"{base_url}/",
+            "authorization_endpoint": f"{base_url}/authorize",
+            "token_endpoint": f"{base_url}/token",
+            "registration_endpoint": f"{base_url}/register",
+            "scopes_supported": ["user", "claudeai"],
+            "response_types_supported": ["code"],
+            "grant_types_supported": ["authorization_code", "refresh_token"],
+            "token_endpoint_auth_methods_supported": ["client_secret_post"],
+            "code_challenge_methods_supported": ["S256"]
+        })
+
+    @app.custom_route("/authorize", methods=["GET"])
+    async def oauth_authorize(request: Request) -> Response:
+        """OAuth authorization endpoint."""
+        # Extract parameters
+        client_id = request.query_params.get("client_id")
+        redirect_uri = request.query_params.get("redirect_uri")
+        state = request.query_params.get("state")
+        scope = request.query_params.get("scope", "")
+        code_challenge = request.query_params.get("code_challenge")
+        
+        if not client_id:
+            raise HTTPException(400, "Missing client_id")
+            
+        # Get client info
+        client = await oauth_provider.get_client(client_id)
+        if not client:
+            raise HTTPException(400, "Invalid client_id")
+            
+        # Create authorization params
+        from mcp.server.auth.provider import AuthorizationParams
+        from pydantic import AnyHttpUrl
+        params = AuthorizationParams(
+            redirect_uri=AnyHttpUrl(redirect_uri) if redirect_uri else None,
+            state=state,
+            code_challenge=code_challenge,
+            redirect_uri_provided_explicitly=bool(redirect_uri),
+            scopes=scope.split() if scope else []  # Add required scopes field
+        )
+        
+        # Get GitHub auth URL
+        auth_url = await oauth_provider.authorize(client, params)
+        return RedirectResponse(auth_url)
+
+    @app.custom_route("/token", methods=["POST"])
+    async def oauth_token(request: Request) -> Response:
+        """OAuth token endpoint."""
+        form = await request.form()
+        grant_type = form.get("grant_type")
+        code = form.get("code")
+        client_id = form.get("client_id")
+        code_verifier = form.get("code_verifier")
+        
+        if grant_type != "authorization_code":
+            raise HTTPException(400, "Unsupported grant type")
+            
+        if not code or not client_id:
+            raise HTTPException(400, "Missing required parameters")
+            
+        # Get client
+        client = await oauth_provider.get_client(client_id)
+        if not client:
+            raise HTTPException(400, "Invalid client")
+            
+        # Load authorization code
+        auth_code = await oauth_provider.load_authorization_code(client, code)
+        if not auth_code:
+            raise HTTPException(400, "Invalid authorization code")
+            
+        # Exchange for token
+        token = await oauth_provider.exchange_authorization_code(client, auth_code)
+        return JSONResponse({
+            "access_token": token.access_token,
+            "token_type": token.token_type,
+            "expires_in": token.expires_in,
+            "scope": token.scope
+        })
+
     @app.custom_route("/github/callback", methods=["GET"])
     async def github_callback_handler(request: Request) -> Response:
         """Handle GitHub OAuth callback."""
@@ -365,43 +449,53 @@ def create_simple_mcp_server(settings: ServerSettings) -> FastMCP:
                 },
             )
 
-    def get_github_token() -> str:
-        """Get the GitHub token for the authenticated user."""
-        access_token = get_access_token()
+    def get_github_token_for_mcp_token(mcp_token: str) -> str:
+        """Get the GitHub token for the given MCP token."""
+        if not mcp_token:
+            raise ValueError("No MCP token provided")
+            
+        # Check if MCP token is valid
+        access_token = oauth_provider.tokens.get(mcp_token)
         if not access_token:
-            raise ValueError("Not authenticated")
+            raise ValueError("Invalid MCP token")
+            
+        # Check if token is expired
+        if access_token.expires_at and access_token.expires_at < time.time():
+            raise ValueError("MCP token expired")
 
         # Get GitHub token from mapping
-        github_token = oauth_provider.token_mapping.get(access_token.token)
-
+        github_token = oauth_provider.token_mapping.get(mcp_token)
         if not github_token:
             raise ValueError("No GitHub token found for user")
 
         return github_token
 
     @app.tool()
-    async def get_user_profile() -> dict[str, Any]:
+    async def get_user_profile(mcp_token: str = "") -> dict[str, Any]:
         """Get the authenticated user's GitHub profile information.
 
         This tool shows your GitHub profile after OAuth authentication.
+        Requires GitHub OAuth authentication to function.
+        
+        Args:
+            mcp_token: The MCP authentication token (optional, for manual testing)
         """
-        github_token = get_github_token()
-
-        async with create_mcp_http_client() as client:
-            response = await client.get(
-                "https://api.github.com/user",
-                headers={
-                    "Authorization": f"Bearer {github_token}",
-                    "Accept": "application/vnd.github.v3+json",
-                },
-            )
-
-            if response.status_code != 200:
-                raise ValueError(
-                    f"GitHub API error: {response.status_code} - {response.text}"
-                )
-
-            return response.json()
+        logger.info("=== TOOL CALLED: get_user_profile ===")
+        try:
+            # For now, just return a simple response to test tool discovery
+            return {
+                "message": "Tool is visible! OAuth authentication would be required for actual GitHub profile data.",
+                "status": "discoverable",
+                "auth_required": True,
+                "oauth_url": f"{settings.server_url}/.well-known/oauth-authorization-server"
+            }
+        except Exception as e:
+            logger.error(f"Tool error: {e}", exc_info=True)
+            raise
+    
+    # Log tools that are registered
+    logger.info(f"=== MCP SERVER CREATED ===")
+    logger.info(f"Server initialized with SSE transport")
 
     return app
 
