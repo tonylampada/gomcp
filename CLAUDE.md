@@ -1,0 +1,1 @@
+- always use the uv venv in this project
