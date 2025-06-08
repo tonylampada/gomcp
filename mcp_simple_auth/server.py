@@ -1,5 +1,6 @@
 """Simple MCP Server with GitHub OAuth Authentication."""
 
+import asyncio
 import logging
 import secrets
 import time
@@ -11,8 +12,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from starlette.exceptions import HTTPException
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, Response
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.applications import Starlette
 
 from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.provider import (
@@ -97,14 +96,6 @@ class SimpleGitHubOAuthProvider(OAuthAuthorizationServerProvider):
 
     async def register_client(self, client_info: OAuthClientInformationFull):
         """Register a new OAuth client."""
-        logger.info(f"=== CLIENT REGISTRATION ===")
-        logger.info(f"Client ID: {client_info.client_id}")
-        logger.info(f"Redirect URIs: {client_info.redirect_uris}")
-        logger.info(f"Grant types: {client_info.grant_types}")
-        logger.info(f"Response types: {client_info.response_types}")
-        logger.info(f"Token auth method: {client_info.token_endpoint_auth_method}")
-        logger.info(f"Scope: {client_info.scope}")
-        logger.info(f"Full client info: {client_info}")
         self.clients[client_info.client_id] = client_info
 
     async def authorize(
@@ -288,23 +279,23 @@ def create_simple_mcp_server(settings: ServerSettings) -> FastMCP:
         issuer_url=settings.server_url,
         client_registration_options=ClientRegistrationOptions(
             enabled=True,
-            valid_scopes=["user", "claudeai"],
-            default_scopes=["user"],
+            valid_scopes=[settings.mcp_scope],
+            default_scopes=[settings.mcp_scope],
         ),
-        required_scopes=[],  # Don't require auth for discovery
+        required_scopes=[],  # Allow unauthenticated discovery
     )
 
     app = FastMCP(
         name="Simple GitHub MCP Server",
         instructions="A simple MCP server with GitHub OAuth authentication",
+        auth_server_provider=oauth_provider,
         host=settings.host,
         port=settings.port,
         debug=True,
+        auth=auth_settings,
         cors=True,  # Enable CORS for remote access
     )
     
-    
-
     @app.custom_route("/", methods=["GET"])
     async def root_endpoint(request: Request) -> Response:
         """Root endpoint for MCP discovery."""
@@ -312,118 +303,15 @@ def create_simple_mcp_server(settings: ServerSettings) -> FastMCP:
             "mcp": {
                 "version": "1.0"
             },
+            "capabilities": {
+                "tools": {}
+            },
             "transport": {
                 "type": "sse",
                 "endpoint": "/sse"
             }
         })
-    
-    @app.custom_route("/debug/test", methods=["GET"])
-    async def debug_test(request: Request) -> Response:
-        """Test endpoint."""
-        return JSONResponse({"status": "ok", "server": "Simple GitHub MCP Server"})
-    
-    
-    
-    @app.custom_route("/sse", methods=["GET"])
-    async def debug_sse(request: Request) -> Response:
-        """Debug SSE endpoint."""
-        logger.info(f"=== SSE REQUEST ===")
-        logger.info(f"Method: {request.method}")
-        logger.info(f"URL: {request.url}")
-        logger.info(f"Headers: {dict(request.headers)}")
-        access_token = None
-        try:
-            access_token = get_access_token()
-            logger.info(f"SSE Access token: {access_token}")
-        except Exception as e:
-            logger.info(f"SSE Auth error: {e}")
-        return JSONResponse({"error": "debug_sse_endpoint", "authenticated": access_token is not None}, status_code=400)
-    
-    
-    # Add OAuth endpoints manually
-    @app.custom_route("/.well-known/oauth-authorization-server", methods=["GET"])
-    async def oauth_discovery(request: Request) -> Response:
-        """OAuth authorization server discovery."""
-        base_url = str(settings.server_url).rstrip('/')  # Remove trailing slash
-        return JSONResponse({
-            "issuer": f"{base_url}/",
-            "authorization_endpoint": f"{base_url}/authorize",
-            "token_endpoint": f"{base_url}/token",
-            "registration_endpoint": f"{base_url}/register",
-            "scopes_supported": ["user", "claudeai"],
-            "response_types_supported": ["code"],
-            "grant_types_supported": ["authorization_code", "refresh_token"],
-            "token_endpoint_auth_methods_supported": ["client_secret_post"],
-            "code_challenge_methods_supported": ["S256"]
-        })
 
-    @app.custom_route("/authorize", methods=["GET"])
-    async def oauth_authorize(request: Request) -> Response:
-        """OAuth authorization endpoint."""
-        # Extract parameters
-        client_id = request.query_params.get("client_id")
-        redirect_uri = request.query_params.get("redirect_uri")
-        state = request.query_params.get("state")
-        scope = request.query_params.get("scope", "")
-        code_challenge = request.query_params.get("code_challenge")
-        
-        if not client_id:
-            raise HTTPException(400, "Missing client_id")
-            
-        # Get client info
-        client = await oauth_provider.get_client(client_id)
-        if not client:
-            raise HTTPException(400, "Invalid client_id")
-            
-        # Create authorization params
-        from mcp.server.auth.provider import AuthorizationParams
-        from pydantic import AnyHttpUrl
-        params = AuthorizationParams(
-            redirect_uri=AnyHttpUrl(redirect_uri) if redirect_uri else None,
-            state=state,
-            code_challenge=code_challenge,
-            redirect_uri_provided_explicitly=bool(redirect_uri),
-            scopes=scope.split() if scope else []  # Add required scopes field
-        )
-        
-        # Get GitHub auth URL
-        auth_url = await oauth_provider.authorize(client, params)
-        return RedirectResponse(auth_url)
-
-    @app.custom_route("/token", methods=["POST"])
-    async def oauth_token(request: Request) -> Response:
-        """OAuth token endpoint."""
-        form = await request.form()
-        grant_type = form.get("grant_type")
-        code = form.get("code")
-        client_id = form.get("client_id")
-        code_verifier = form.get("code_verifier")
-        
-        if grant_type != "authorization_code":
-            raise HTTPException(400, "Unsupported grant type")
-            
-        if not code or not client_id:
-            raise HTTPException(400, "Missing required parameters")
-            
-        # Get client
-        client = await oauth_provider.get_client(client_id)
-        if not client:
-            raise HTTPException(400, "Invalid client")
-            
-        # Load authorization code
-        auth_code = await oauth_provider.load_authorization_code(client, code)
-        if not auth_code:
-            raise HTTPException(400, "Invalid authorization code")
-            
-        # Exchange for token
-        token = await oauth_provider.exchange_authorization_code(client, auth_code)
-        return JSONResponse({
-            "access_token": token.access_token,
-            "token_type": token.token_type,
-            "expires_in": token.expires_in,
-            "scope": token.scope
-        })
 
     @app.custom_route("/github/callback", methods=["GET"])
     async def github_callback_handler(request: Request) -> Response:
@@ -449,60 +337,57 @@ def create_simple_mcp_server(settings: ServerSettings) -> FastMCP:
                 },
             )
 
-    def get_github_token_for_mcp_token(mcp_token: str) -> str:
-        """Get the GitHub token for the given MCP token."""
-        if not mcp_token:
-            raise ValueError("No MCP token provided")
-            
-        # Check if MCP token is valid
-        access_token = oauth_provider.tokens.get(mcp_token)
+    def get_github_token() -> str:
+        """Get the GitHub token for the authenticated user."""
+        access_token = get_access_token()
         if not access_token:
-            raise ValueError("Invalid MCP token")
-            
-        # Check if token is expired
-        if access_token.expires_at and access_token.expires_at < time.time():
-            raise ValueError("MCP token expired")
+            raise ValueError("Not authenticated")
 
         # Get GitHub token from mapping
-        github_token = oauth_provider.token_mapping.get(mcp_token)
+        github_token = oauth_provider.token_mapping.get(access_token.token)
+
         if not github_token:
             raise ValueError("No GitHub token found for user")
 
         return github_token
 
     @app.tool()
-    async def get_user_profile(mcp_token: str = "") -> dict[str, Any]:
+    async def get_user_profile() -> dict[str, Any]:
         """Get the authenticated user's GitHub profile information.
 
-        This tool shows your GitHub profile after OAuth authentication.
-        Requires GitHub OAuth authentication to function.
-        
-        Args:
-            mcp_token: The MCP authentication token (optional, for manual testing)
+        This is the only tool in our simple example. It requires authentication.
         """
-        logger.info("=== TOOL CALLED: get_user_profile ===")
         try:
-            # For now, just return a simple response to test tool discovery
+            github_token = get_github_token()
+        except ValueError as e:
             return {
-                "message": "Tool is visible! OAuth authentication would be required for actual GitHub profile data.",
-                "status": "discoverable",
-                "auth_required": True,
-                "oauth_url": f"{settings.server_url}/.well-known/oauth-authorization-server"
+                "error": "Authentication required",
+                "message": str(e),
+                "auth_url": f"{str(settings.server_url).rstrip('/')}/authorize?client_id=91be729f-30be-4614-b93f-f2b4a7ec8a98&response_type=code&scope=claudeai&redirect_uri=https://claude.ai/api/mcp/auth_callback"
             }
-        except Exception as e:
-            logger.error(f"Tool error: {e}", exc_info=True)
-            raise
-    
-    # Log tools that are registered
-    logger.info(f"=== MCP SERVER CREATED ===")
-    logger.info(f"Server initialized with SSE transport")
 
+        async with create_mcp_http_client() as client:
+            response = await client.get(
+                "https://api.github.com/user",
+                headers={
+                    "Authorization": f"Bearer {github_token}",
+                    "Accept": "application/vnd.github.v3+json",
+                },
+            )
+
+            if response.status_code != 200:
+                raise ValueError(
+                    f"GitHub API error: {response.status_code} - {response.text}"
+                )
+
+            return response.json()
+    
     return app
 
 
 @click.command()
 @click.option("--port", default=9090, help="Port to listen on")
-@click.option("--host", default="localhost", help="Host to bind to")
+@click.option("--host", default="0.0.0.0", help="Host to bind to")
 @click.option(
     "--transport",
     default="sse",
@@ -511,16 +396,12 @@ def create_simple_mcp_server(settings: ServerSettings) -> FastMCP:
 )
 def main(port: int, host: str, transport: Literal["sse", "streamable-http"]) -> int:
     """Run the simple GitHub MCP server."""
-    print(f"Starting MCP server on {host}:{port} with {transport} transport...")
-    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    logging.basicConfig(level=logging.INFO)
 
     try:
-        print("Loading settings from environment...")
         # No hardcoded credentials - all from environment variables
         settings = ServerSettings(host=host, port=port)
-        print(f"Settings loaded successfully: host={settings.host}, port={settings.port}")
     except ValueError as e:
-        print(f"ERROR: Failed to load settings: {e}")
         logger.error(
             "Failed to load settings. Make sure environment variables are set:"
         )
@@ -529,26 +410,8 @@ def main(port: int, host: str, transport: Literal["sse", "streamable-http"]) -> 
         logger.error(f"Error: {e}")
         return 1
 
-    print("Creating MCP server...")
     mcp_server = create_simple_mcp_server(settings)
-    print("MCP server created successfully")
-    
     logger.info(f"Starting server with {transport} transport")
-    logger.info(f"MCP endpoints should be available at:")
-    logger.info(f"  - SSE: https://mcp.evolutio.io/sse")
-    logger.info(f"  - Messages: https://mcp.evolutio.io/messages/")
-    logger.info(f"  - StreamableHTTP: https://mcp.evolutio.io/mcp")
-    
-    print(f"Server starting on http://{host}:{port}")
-    print("Press Ctrl+C to stop the server")
-    
-    try:
-        mcp_server.run(transport=transport)
-    except KeyboardInterrupt:
-        print("\nServer stopped by user")
-    except Exception as e:
-        print(f"ERROR: Server crashed: {e}")
-        raise
-    
+    mcp_server.run(transport=transport)
     return 0
 
