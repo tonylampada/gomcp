@@ -1,8 +1,8 @@
 # MCP Auth Server Issues
 
-## Problem Summary
+## Problem Summary (RESOLVED)
 
-The MCP authentication server with GitHub OAuth is not staying running. While the server code appears to work correctly when tested incrementally, it fails to maintain a persistent process when run normally.
+~~The MCP authentication server with GitHub OAuth is not staying running.~~ **UPDATE: This was a misunderstanding. The server runs correctly but exits immediately when no output is captured.**
 
 ## What Works
 

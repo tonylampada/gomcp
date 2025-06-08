@@ -85,9 +85,14 @@ tail -f server_output.log | grep -E "(ListToolsRequest|CallToolRequest|mcp|tools
 ./stop_server.sh
 ```
 
+## Fixed Issues
+1. **Server Startup Problem**: The issue was with `python -m mcp_simple_auth.server` not working due to click command handling in `__main__.py`. Fixed by using the entry point `mcp-simple-auth` instead.
+2. **Server is now running successfully** at https://mcp.evolutio.io
+
 ## Next Action Items
-- [ ] Start server and monitor MCP protocol requests
-- [ ] Add debug logging to MCP endpoints
+- [x] Start server and monitor MCP protocol requests - Server running!
+- [ ] Connect from Claude.ai and monitor logs for MCP protocol requests
+- [ ] Debug why tools aren't visible after authentication
+- [ ] Add debug logging to MCP endpoints if needed
 - [ ] Test tool discovery manually via curl
-- [ ] Check FastMCP tool registration process
 - [ ] Verify authentication context in tool handlers

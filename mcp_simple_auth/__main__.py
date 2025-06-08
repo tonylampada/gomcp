@@ -4,4 +4,6 @@ import sys
 
 from mcp_simple_auth.server import main
 
-sys.exit(main())  # type: ignore[call-arg]
+if __name__ == "__main__":
+    # Click will handle command line arguments
+    main()

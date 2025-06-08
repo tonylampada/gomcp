@@ -7,7 +7,7 @@ echo "=================="
 echo ""
 
 # Check if server is running
-if pgrep -f "mcp_simple_auth.server" > /dev/null; then
+if pgrep -f "mcp-simple-auth" > /dev/null; then
     echo "✅ Server is running"
     echo ""
     

@@ -417,12 +417,16 @@ def create_simple_mcp_server(settings: ServerSettings) -> FastMCP:
 )
 def main(port: int, host: str, transport: Literal["sse", "streamable-http"]) -> int:
     """Run the simple GitHub MCP server."""
+    print(f"Starting MCP server on {host}:{port} with {transport} transport...")
     logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
     try:
+        print("Loading settings from environment...")
         # No hardcoded credentials - all from environment variables
         settings = ServerSettings(host=host, port=port)
+        print(f"Settings loaded successfully: host={settings.host}, port={settings.port}")
     except ValueError as e:
+        print(f"ERROR: Failed to load settings: {e}")
         logger.error(
             "Failed to load settings. Make sure environment variables are set:"
         )
@@ -431,12 +435,26 @@ def main(port: int, host: str, transport: Literal["sse", "streamable-http"]) -> 
         logger.error(f"Error: {e}")
         return 1
 
+    print("Creating MCP server...")
     mcp_server = create_simple_mcp_server(settings)
+    print("MCP server created successfully")
+    
     logger.info(f"Starting server with {transport} transport")
     logger.info(f"MCP endpoints should be available at:")
     logger.info(f"  - SSE: https://mcp.evolutio.io/sse")
     logger.info(f"  - Messages: https://mcp.evolutio.io/messages/")
     logger.info(f"  - StreamableHTTP: https://mcp.evolutio.io/mcp")
-    mcp_server.run(transport=transport)
+    
+    print(f"Server starting on http://{host}:{port}")
+    print("Press Ctrl+C to stop the server")
+    
+    try:
+        mcp_server.run(transport=transport)
+    except KeyboardInterrupt:
+        print("\nServer stopped by user")
+    except Exception as e:
+        print(f"ERROR: Server crashed: {e}")
+        raise
+    
     return 0
 

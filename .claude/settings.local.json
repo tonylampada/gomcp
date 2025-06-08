@@ -23,7 +23,16 @@
       "Bash(uv)",
       "Bash(uv add:*)",
       "Bash(chmod:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(./start_server.sh:*)",
+      "Bash(./stop_server.sh:*)",
+      "Bash(ls:*)",
+      "Bash(./diagnose_startup.sh:*)",
+      "Bash(./test_entry_point.sh:*)",
+      "Bash(./test_server.sh:*)",
+      "Bash(./monitor_mcp.sh:*)"
     ],
     "deny": []
   }
